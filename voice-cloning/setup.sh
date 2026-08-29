@@ -4,6 +4,7 @@
 #
 #   ./setup.sh              # auto-detect GPU
 #   ./setup.sh --cpu        # force the CPU build
+#   ./setup.sh --mps        # force Apple Metal (Apple Silicon)
 #   ./setup.sh --cuda cu126 # force a specific CUDA build (cu118|cu124|cu126)
 set -euo pipefail
 
@@ -14,6 +15,7 @@ CUDA_TAG="cu124"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --cpu)  FORCE="cpu"; shift ;;
+    --mps)  FORCE="mps"; shift ;;
     --cuda) FORCE="cuda"; CUDA_TAG="${2:-cu124}"; shift 2 ;;
     --venv) VENV="$2"; shift 2 ;;
     -h|--help) sed -n '2,7p' "$0"; exit 0 ;;
@@ -52,15 +54,26 @@ else
   TARGET="cpu"
 fi
 
-case "$TARGET" in
-  cuda) echo "Hardware   : NVIDIA GPU detected -> CUDA build ($CUDA_TAG)"
-        nvidia-smi --query-gpu=name,memory.total --format=csv,noheader 2>/dev/null || true
-        INDEX="--index-url https://download.pytorch.org/whl/${CUDA_TAG}" ;;
-  mps)  echo "Hardware   : Apple Silicon -> default build (Metal/MPS)"
-        INDEX="" ;;
-  *)    echo "Hardware   : no GPU detected -> CPU build (generation will be slow)"
-        INDEX="--index-url https://download.pytorch.org/whl/cpu" ;;
-esac
+# On macOS the default PyPI wheel is the only one published for arm64 and it
+# carries both CPU and MPS support, so never point pip at an index URL there -
+# the cpu/cuda indexes have no macOS arm64 wheels and resolution would fail.
+if [[ "$OS" == "Darwin" ]]; then
+  case "$TARGET" in
+    cuda) echo "ERROR: CUDA is not available on macOS." >&2; exit 1 ;;
+    cpu)  echo "Hardware   : macOS, forcing CPU (default wheel, MPS unused)" ;;
+    *)    echo "Hardware   : Apple Silicon -> default wheel (Metal/MPS)" ;;
+  esac
+  INDEX=""
+else
+  case "$TARGET" in
+    cuda) echo "Hardware   : NVIDIA GPU detected -> CUDA build ($CUDA_TAG)"
+          nvidia-smi --query-gpu=name,memory.total --format=csv,noheader 2>/dev/null || true
+          INDEX="--index-url https://download.pytorch.org/whl/${CUDA_TAG}" ;;
+    mps)  echo "ERROR: MPS requires Apple Silicon; this is not macOS." >&2; exit 1 ;;
+    *)    echo "Hardware   : no GPU detected -> CPU build (generation will be slow)"
+          INDEX="--index-url https://download.pytorch.org/whl/cpu" ;;
+  esac
+fi
 
 # --- build the environment ------------------------------------------------ #
 echo "Creating   : $VENV"

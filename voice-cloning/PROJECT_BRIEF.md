@@ -21,8 +21,20 @@ GitHub `resemble-ai/chatterbox` · PyPI `chatterbox-tts` (pinned to **0.1.7**).
 
 ## Hardware
 
-**NVIDIA GPU.** Target device is `cuda`. Expect ~1–3 s per sentence.
-Base model needs ~6 GB VRAM; Turbo (350M) is the fallback if that OOMs.
+**Primary: Apple M4 Pro (macOS).** Target device is `mps`. The script sets
+`PYTORCH_ENABLE_MPS_FALLBACK=1` before importing torch, so ops Metal has not
+implemented fall back to CPU instead of hard-failing.
+
+Be aware MPS support in this stack is the least-exercised path: if generation
+errors out or produces garbage, run `--device cpu` and compare. An M4 Pro has
+enough CPU cores that the fallback is usable, not a dead end. Unified memory
+means there is no separate VRAM limit to hit, so `--turbo` is about speed here,
+not memory.
+
+**Secondary: NVIDIA GPU** (`cuda`, ~1–3 s per sentence, base model wants ~6 GB
+VRAM, `--turbo` if it OOMs). `setup.sh` detects whichever machine it runs on
+and installs the matching torch build — no code change needed to move between
+them.
 
 ## Verified API — checked against chatterbox-tts 0.1.7 source
 
@@ -62,10 +74,15 @@ wrong causes silent misbehaviour:
 
 - **Python 3.11.** (Package metadata says `>=3.10`, but 3.11 is what this is
   tested against. Do not use a newer system Python.)
-- PyTorch must be the **CUDA** build: `python -c "import torch; print(torch.cuda.is_available())"`
-  must print `True`. If `False`, pip installed the CPU wheel — reinstall from
-  the CUDA index URL matching the driver (`nvidia-smi` shows the CUDA version →
-  `cu118` / `cu124` / `cu126`).
+- **On macOS:** the default PyPI torch wheel already includes MPS — do *not*
+  pass an `--index-url`. Verify with
+  `python -c "import torch; print(torch.backends.mps.is_available())"` → `True`.
+  Python 3.11 via `brew install python@3.11`; `brew install ffmpeg` for clip
+  conversion.
+- **On NVIDIA:** torch must be the CUDA build —
+  `python -c "import torch; print(torch.cuda.is_available())"` must print `True`.
+  If `False`, pip installed the CPU wheel; reinstall from the CUDA index URL
+  matching the driver (`nvidia-smi` shows it → `cu118` / `cu124` / `cu126`).
 - `chatterbox-tts` already pins `numpy<2.0`, so a current pip resolves numpy
   correctly on its own. Only if something else forces numpy 2.x:
   `pip install numpy==1.26.4 --force-reinstall`.
@@ -96,9 +113,11 @@ gitignored; `.env.example` is the committed template.
 
 ## Task list
 
-1. ~~Detect hardware and OS~~ — **NVIDIA GPU, done.**
-2. Create the Python 3.11 env and install; confirm `torch.cuda.is_available()` is `True`.
-   → `./setup.sh` (add `--cuda cu126` / `--cuda cu118` if the driver needs it)
+1. ~~Detect hardware and OS~~ — **Apple M4 Pro first; NVIDIA box later.**
+2. Create the Python 3.11 env and install → `./setup.sh`.
+   Confirm the right accelerator is live: `mps available True` on the Mac,
+   `cuda available True` on the NVIDIA box (there, add `--cuda cu126` /
+   `--cuda cu118` if the driver needs it).
 3. Put a 10–20 s reference clip in `voices/` (or convert one:
    `ffmpeg -i in.m4a -ss 5 -t 15 -ar 24000 -ac 1 voices/me.wav`).
 4. Run `python clone_voice.py --text "..."` until it produces `output.wav`.
@@ -118,7 +137,8 @@ gitignored; `.env.example` is the committed template.
 | Flat, robotic | `--exaggeration 0.7 --cfg-weight 0.3` |
 | Garbled on long text | lower `--max-chars` (e.g. 200) |
 | Artifacts / warbling | `--temperature 0.6` |
-| CUDA OOM | `--turbo`, or lower `--max-chars`, or `--device cpu` |
+| CUDA OOM (NVIDIA) | `--turbo`, or lower `--max-chars`, or `--device cpu` |
+| MPS error / garbled audio (Mac) | `--device cpu` to confirm it is an MPS issue, not a clip issue |
 
 Generation is stochastic — same command, different take each run. Use `--seed`
 to lock one in.

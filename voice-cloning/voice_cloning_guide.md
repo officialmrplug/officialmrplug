@@ -31,7 +31,32 @@ cd voice-cloning
 source .venv/bin/activate
 ```
 
-`setup.sh --cpu` or `setup.sh --cuda cu126` overrides the detection. It also
+`setup.sh --cpu`, `--mps`, or `--cuda cu126` overrides the detection.
+
+### Apple Silicon (M1/M2/M3/M4)
+
+The default PyPI torch wheel already includes Metal/MPS — **do not pass an
+index URL on macOS**; the cpu/cuda indexes publish no macOS arm64 wheels and
+resolution fails. `setup.sh` handles this automatically.
+
+```bash
+brew install python@3.11 ffmpeg
+./setup.sh                 # prints: mps available True
+```
+
+`clone_voice.py` sets `PYTORCH_ENABLE_MPS_FALLBACK=1` before importing torch,
+so ops Metal has not implemented fall back to CPU rather than crashing.
+
+MPS is the least-exercised path in this stack. If a run errors out or the audio
+comes back garbled, check whether it is Metal rather than your clip:
+
+```bash
+python clone_voice.py --text "Testing one two three." --device cpu
+```
+
+If CPU sounds right and MPS does not, it is an MPS issue — stay on `--device cpu`.
+Apple Silicon has no separate VRAM pool, so unified memory means you are
+unlikely to hit an out-of-memory wall; `--turbo` there buys speed, not headroom. It also
 creates `.env` from `.env.example` on first run.
 
 ### Configuration (`.env`)
