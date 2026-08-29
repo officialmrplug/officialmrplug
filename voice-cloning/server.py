@@ -34,11 +34,12 @@ os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 
 import torch
 import soundfile as sf
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
-from clone_voice import pick_device, describe_device, split_text
+from clone_voice import (pick_device, describe_device, split_text,
+                         env_str, env_int, resolve_reference)  # noqa: F401
 
 # Formats soundfile writes directly; everything else needs ffmpeg.
 NATIVE_FORMATS = {"wav": "WAV", "flac": "FLAC", "ogg": "OGG"}
@@ -50,6 +51,16 @@ MEDIA_TYPES = {
 
 STATE: dict = {"model": None, "sr": None, "lock": threading.Lock(), "cfg": None}
 app = FastAPI(title="Chatterbox TTS (local)", version="1.0")
+
+
+def require_auth(request: Request) -> None:
+    """No-op unless SERVER_API_KEY is set; then require a matching bearer token."""
+    key = STATE["cfg"].api_key
+    if not key:
+        return
+    header = request.headers.get("authorization", "")
+    if header.removeprefix("Bearer ").strip() != key:
+        raise HTTPException(401, "invalid or missing API key")
 
 
 class SpeechRequest(BaseModel):
@@ -161,7 +172,8 @@ def models():
 
 
 @app.post("/v1/audio/speech")
-def speech(req: SpeechRequest):
+def speech(req: SpeechRequest, request: Request):
+    require_auth(request)
     if not req.input.strip():
         raise HTTPException(400, "input is empty")
     ref = resolve_voice(req.voice)
@@ -212,17 +224,18 @@ def speech(req: SpeechRequest):
 
 def parse_args(argv=None):
     p = argparse.ArgumentParser(description="Local OpenAI-compatible Chatterbox TTS server.")
-    p.add_argument("--host", default="127.0.0.1", help="use 0.0.0.0 to expose on your LAN")
-    p.add_argument("--port", type=int, default=8000)
-    p.add_argument("--voices", default="voices", help="directory of reference clips")
-    p.add_argument("--device", default="auto", choices=["auto", "cuda", "mps", "cpu"])
+    p.add_argument("--host", default=env_str("SERVER_HOST", "127.0.0.1"), help="use 0.0.0.0 to expose on your LAN")
+    p.add_argument("--port", type=int, default=env_int("SERVER_PORT", 8000))
+    p.add_argument("--voices", default=env_str("VOICES_DIR", "voices"), help="directory of reference clips")
+    p.add_argument("--device", default=env_str("VOICE_DEVICE", "auto"), choices=["auto", "cuda", "mps", "cpu"])
     p.add_argument("--turbo", action="store_true")
     p.add_argument("--multilingual", action="store_true")
-    p.add_argument("--language", default="en", help="default language for --multilingual")
+    p.add_argument("--language", default=env_str("VOICE_LANGUAGE", "en"), help="default language for --multilingual")
     p.add_argument("--preload", action="store_true", help="load weights at startup, not on first request")
     args = p.parse_args(argv)
     if args.turbo and args.multilingual:
         p.error("--turbo and --multilingual cannot be combined")
+    args.api_key = env_str("SERVER_API_KEY")
     args.device = pick_device(args.device)
     return args
 
@@ -236,8 +249,10 @@ def main(argv=None):
 
     print(f"Device : {describe_device(args.device)}")
     print(f"Voices : {root.resolve()}")
-    if args.host != "127.0.0.1":
-        print(f"WARNING: binding to {args.host} - this API has no authentication.")
+    print(f"Auth   : {'bearer token required (SERVER_API_KEY)' if args.api_key else 'none'}")
+    if args.host != "127.0.0.1" and not args.api_key:
+        print(f"WARNING: binding to {args.host} with NO authentication - anyone on your\n"
+              f"         network can use this. Set SERVER_API_KEY in .env.")
     if args.preload:
         get_model()
     uvicorn.run(app, host=args.host, port=args.port, log_level="info")

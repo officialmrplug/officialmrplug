@@ -75,6 +75,13 @@ echo "Installing : torch 2.6.0 ($TARGET)"
 echo "Installing : chatterbox-tts + API server deps"
 "$PIP" install chatterbox-tts fastapi uvicorn
 
+# --- first-run config ----------------------------------------------------- #
+if [[ ! -f .env && -f .env.example ]]; then
+  cp .env.example .env
+  echo "Config     : created .env from .env.example (gitignored - edit it freely)"
+fi
+mkdir -p voices
+
 # --- verify --------------------------------------------------------------- #
 echo
 echo "Verifying..."
@@ -93,7 +100,8 @@ cat <<EOF
 
 Done. Next:
   source $VENV/bin/activate
-  python clone_voice.py --ref your_voice.wav --text "Hello world"
+  cp your_recording.wav voices/            # any filename; it is auto-detected
+  python clone_voice.py --text "Hello world"
 
 If 'cuda available' printed False but you do have an NVIDIA GPU, re-run:
   ./setup.sh --cuda cu126     (or cu118, matching your driver)

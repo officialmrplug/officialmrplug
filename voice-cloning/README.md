@@ -10,10 +10,14 @@ Built on [Chatterbox TTS](https://github.com/resemble-ai/chatterbox) by Resemble
 ## Quick start
 
 ```bash
-./setup.sh                       # detects GPU, installs matching PyTorch
+./setup.sh                    # detects GPU, installs torch, creates .env
 source .venv/bin/activate
-python clone_voice.py --ref my_voice.wav --text "Hello, this is my cloned voice."
+cp ~/my_recording.wav voices/ # any filename - it is auto-detected
+python clone_voice.py --text "Hello, this is my cloned voice."
 ```
+
+Nothing is hard-coded: settings resolve **CLI flag → env var → `.env` →
+auto-discovery**. Copy `.env.example` to `.env` to change defaults.
 
 First run downloads ~2 GB of weights from Hugging Face (once). After that it is
 fully offline.
@@ -27,15 +31,18 @@ fully offline.
 | `setup.sh` | Environment bootstrap with hardware detection |
 | `voice_cloning_guide.md` | Full setup, tuning and troubleshooting guide |
 | `requirements.txt` | Pinned dependencies |
+| `.env.example` | Config template - copy to `.env` (gitignored) |
+| `PROJECT_BRIEF.md` | Self-contained brief for picking this up in a new session |
 
 ## Common commands
 
 ```bash
-python clone_voice.py --ref v.wav --text-file script.txt --out narration.wav
-python clone_voice.py --ref v.wav --text "Hi" --turbo            # smaller model, less VRAM
-python clone_voice.py --ref v.wav --text "Bonjour" --language fr # 23 languages
-python clone_voice.py --ref v.wav --text "Hi" --exaggeration 0.7 --cfg-weight 0.3
-python server.py                                                 # local API on :8000
+python clone_voice.py --text-file script.txt --out narration.wav
+python clone_voice.py --text "Hi" --turbo                 # smaller model, less VRAM
+python clone_voice.py --text "Bonjour" --language fr      # 23 languages
+python clone_voice.py --text "Hi" --exaggeration 0.7 --cfg-weight 0.3
+python clone_voice.py --ref voices/dad.wav --text "Hi"    # pick a specific clip
+python server.py                                          # local API on :8000
 ```
 
 See [`voice_cloning_guide.md`](voice_cloning_guide.md) for tuning and troubleshooting.
@@ -49,4 +56,5 @@ Roughly per sentence: NVIDIA ~1–3 s · Apple Silicon ~5–15 s · CPU ~1–3 m
 ## Responsible use
 
 - **Only clone voices you have permission to use.**
+- `.env` and everything in `voices/` are gitignored - secrets and voice clips never get committed.
 - Every output carries Resemble's inaudible Perth watermark by design. Leave it in place.

@@ -31,7 +31,25 @@ cd voice-cloning
 source .venv/bin/activate
 ```
 
-`setup.sh --cpu` or `setup.sh --cuda cu126` overrides the detection.
+`setup.sh --cpu` or `setup.sh --cuda cu126` overrides the detection. It also
+creates `.env` from `.env.example` on first run.
+
+### Configuration (`.env`)
+
+Nothing is hard-coded. Settings resolve in this order, first win:
+
+1. command-line flag — `--ref my_voice.wav`
+2. shell environment variable — `VOICE_REF=my_voice.wav`
+3. `.env` in the project folder
+4. auto-discovery — the only clip in `voices/`
+
+So the usual workflow is: drop a clip in `voices/`, run
+`python clone_voice.py --text "..."`. With more than one clip there, set
+`VOICE_REF` in `.env` or pass `--ref`.
+
+`.env` is gitignored and never committed; `.env.example` is the template and
+lists every supported key. `HF_HOME` relocates the ~2 GB weight cache if you
+want it off your system drive.
 
 <details>
 <summary>Manual install</summary>
@@ -186,9 +204,20 @@ Extra body fields `exaggeration`, `cfg_weight`, `temperature`, `language`, and
 for compatibility but ignored — Chatterbox has no speed control; use
 `--cfg-weight` to influence pacing instead.
 
-The server **binds to 127.0.0.1 and has no authentication.** Only pass
-`--host 0.0.0.0` if you intend to expose it to your network, and put a
-reverse proxy with auth in front of it if so.
+The server **binds to 127.0.0.1** by default, so only this machine can reach it.
+
+Set `SERVER_API_KEY` in `.env` to require a bearer token:
+
+```bash
+curl http://127.0.0.1:8000/v1/audio/speech \
+  -H "Authorization: Bearer $SERVER_API_KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{"input":"Hello","voice":"my_voice"}' --output hello.wav
+```
+
+With no key set, access is open — fine on 127.0.0.1. If you pass
+`--host 0.0.0.0` to expose it on your LAN, set a key; the server warns loudly
+if you do not. `/health` stays unauthenticated so you can monitor it.
 
 Requests are serialised with a lock — one generation at a time, since a single
 GPU cannot serve concurrent requests anyway.

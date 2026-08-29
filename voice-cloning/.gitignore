@@ -1,9 +1,16 @@
+# Secrets and local config - never commit
+.env
+
+# Python
 .venv/
 __pycache__/
 *.pyc
-voices/
+
+# Voice clips and generated audio stay local (privacy)
+voices/*
+!voices/.gitkeep
 *.wav
 *.mp3
 *.flac
 *.ogg
-!examples/*.wav
+*.m4a

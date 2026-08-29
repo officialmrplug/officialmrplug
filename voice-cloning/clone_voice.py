@@ -2,26 +2,21 @@
 """
 Zero-shot voice cloning with Chatterbox TTS (Resemble AI) - 100% local.
 
-Quick start:
-    1. Edit REFERENCE_VOICE and TEXT_TO_SPEAK below.
-    2. python clone_voice.py
+Nothing is hard-coded. Configuration is resolved in this order, first win:
 
-Or from the command line:
-    python clone_voice.py --ref my_voice.wav --text "Hello world" --out hello.wav
-    python clone_voice.py --ref my_voice.wav --text-file script.txt --turbo
-    python clone_voice.py --ref my_voice.wav --text "Bonjour" --language fr
+    1. command-line flag        --ref my_voice.wav
+    2. environment variable     VOICE_REF=my_voice.wav
+    3. .env file in this folder VOICE_REF=my_voice.wav
+    4. auto-discovery           the only clip in the voices/ folder
+
+So after copying .env.example to .env and dropping a clip in voices/, this
+is the whole workflow:
+
+    python clone_voice.py --text "Hello world"
 
 Nothing leaves this machine. Model weights are downloaded once from Hugging
-Face on the first run (~2GB), then cached locally in ~/.cache/huggingface.
+Face on the first run (~2GB), then cached locally (see HF_HOME in .env).
 """
-
-# ---------------------------------------------------------------------------
-# EDIT THESE TWO LINES (or pass --ref / --text on the command line)
-# ---------------------------------------------------------------------------
-REFERENCE_VOICE = "reference_voice.wav"   # 10-20s clip of the voice to clone
-TEXT_TO_SPEAK = "Hello! This is my cloned voice, generated entirely on my own machine."
-OUTPUT_FILE = "output.wav"
-# ---------------------------------------------------------------------------
 
 import argparse
 import os
@@ -29,6 +24,71 @@ import re
 import sys
 import time
 from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+AUDIO_SUFFIXES = (".wav", ".mp3", ".flac", ".ogg", ".m4a", ".aac", ".opus")
+
+
+def load_dotenv_file(path: Path) -> None:
+    """Minimal .env loader: KEY=value, # comments, optional quotes.
+
+    Kept dependency-free on purpose, and it never overrides a variable that is
+    already set in the real environment.
+    """
+    if not path.is_file():
+        return
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key, value = key.strip(), value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        # A blank value means "unset", not "empty string". Exporting an empty
+        # HF_HOME, for instance, makes Hugging Face cache into a relative ./hub
+        # directory and download ~2GB into the project folder.
+        if value == "":
+            continue
+        os.environ.setdefault(key, value)
+
+
+load_dotenv_file(Path(os.environ.get("VOICE_ENV_FILE", HERE / ".env")))
+
+
+def env_str(key: str, default=None):
+    value = os.environ.get(key)
+    return value if value not in (None, "") else default
+
+
+def env_float(key: str, default):
+    raw = env_str(key)
+    if raw is None:
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        sys.exit(f"ERROR: {key} in .env must be a number, got {raw!r}")
+
+
+def env_int(key: str, default):
+    raw = env_str(key)
+    if raw is None:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        sys.exit(f"ERROR: {key} in .env must be an integer, got {raw!r}")
+
+
+def env_bool(key: str, default=False):
+    raw = env_str(key)
+    return default if raw is None else raw.strip().lower() in ("1", "true", "yes", "on")
+
+
+# Honour a custom weight-cache location before torch/HF are imported.
+if env_str("HF_HOME"):
+    os.environ.setdefault("HF_HOME", env_str("HF_HOME"))
 
 # Must be set before torch is imported, otherwise unimplemented MPS ops hard-fail
 # on Apple Silicon instead of falling back to CPU.
@@ -74,8 +134,37 @@ def describe_device(device: str) -> str:
 
 
 # --------------------------------------------------------------------------- #
-# Reference clip checks
+# Reference clip resolution and checks
 # --------------------------------------------------------------------------- #
+def resolve_reference(explicit: str | None, voices_dir: str) -> str:
+    """Find the reference clip without assuming any particular filename."""
+    if explicit:
+        return explicit
+
+    root = Path(voices_dir)
+    if not root.is_absolute():
+        root = HERE / root
+    clips = sorted(p for p in root.glob("*") if p.suffix.lower() in AUDIO_SUFFIXES)
+
+    if len(clips) == 1:
+        print(f"  (using the only clip in {root.name}/: {clips[0].name})")
+        return str(clips[0])
+    if not clips:
+        sys.exit(
+            f"ERROR: no reference clip given and none found in {root}/\n"
+            f"       Do one of these:\n"
+            f"         - drop a 10-20s clip into {root}/\n"
+            f"         - set VOICE_REF=<path> in .env\n"
+            f"         - pass --ref <path>"
+        )
+    sys.exit(
+        f"ERROR: {len(clips)} clips in {root}/ - pick one explicitly.\n"
+        f"       Available: {', '.join(p.stem for p in clips)}\n"
+        f"       e.g. --ref {clips[0]}   (or set VOICE_REF in .env)"
+    )
+
+
+
 def check_reference(path: str) -> None:
     """Fail fast on a missing clip; warn about clips likely to clone badly."""
     p = Path(path)
@@ -83,7 +172,7 @@ def check_reference(path: str) -> None:
         sys.exit(
             f"ERROR: reference clip not found: {p}\n"
             f"       Record 10-20 seconds of the voice you have permission to clone,\n"
-            f"       then either edit REFERENCE_VOICE at the top of this file or pass --ref.\n"
+            f"       Set VOICE_REF in .env, pass --ref, or drop a clip into voices/.\n"
             f"       Convert anything to WAV with:  ffmpeg -i input.m4a -ar 24000 -ac 1 {p}"
         )
 
@@ -271,23 +360,26 @@ def parse_args(argv=None):
         description="Zero-shot voice cloning with Chatterbox TTS (fully local).",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    p.add_argument("--ref", default=REFERENCE_VOICE, help="reference voice clip to clone")
+    p.add_argument("--ref", default=env_str("VOICE_REF"),
+                   help="reference voice clip (default: VOICE_REF, else the only clip in --voices-dir)")
+    p.add_argument("--voices-dir", default=env_str("VOICES_DIR", "voices"),
+                   help="folder searched when --ref is not given")
     p.add_argument("--text", default=None, help="text to speak")
     p.add_argument("--text-file", default=None, help="read the text from a file instead")
-    p.add_argument("--out", default=OUTPUT_FILE, help="output WAV path")
-    p.add_argument("--device", default="auto", choices=["auto", "cuda", "mps", "cpu"])
-    p.add_argument("--turbo", action="store_true",
+    p.add_argument("--out", default=env_str("VOICE_OUTPUT", "output.wav"), help="output WAV path")
+    p.add_argument("--device", default=env_str("VOICE_DEVICE", "auto"), choices=["auto", "cuda", "mps", "cpu"])
+    p.add_argument("--turbo", action="store_true", default=env_bool("VOICE_TURBO"),
                    help="use the 350M Turbo model (less VRAM; ignores exaggeration/cfg-weight)")
-    p.add_argument("--language", default=None,
+    p.add_argument("--language", default=env_str("VOICE_LANGUAGE"),
                    help="ISO code for the multilingual model, e.g. fr, de, ja")
-    p.add_argument("--exaggeration", type=float, default=0.5, help="0 = flat, 1 = very expressive")
-    p.add_argument("--cfg-weight", type=float, default=0.5, help="how closely to follow reference cadence")
-    p.add_argument("--temperature", type=float, default=0.8)
+    p.add_argument("--exaggeration", type=float, default=env_float("VOICE_EXAGGERATION", 0.5), help="0 = flat, 1 = very expressive")
+    p.add_argument("--cfg-weight", type=float, default=env_float("VOICE_CFG_WEIGHT", 0.5), help="how closely to follow reference cadence")
+    p.add_argument("--temperature", type=float, default=env_float("VOICE_TEMPERATURE", 0.8))
     p.add_argument("--repetition-penalty", type=float, default=None,
                    help="default: 1.2 (base/turbo), 2.0 (multilingual)")
-    p.add_argument("--max-chars", type=int, default=300, help="split text into chunks this long")
-    p.add_argument("--gap", type=float, default=0.15, help="seconds of silence between chunks")
-    p.add_argument("--seed", type=int, default=None, help="set for reproducible output")
+    p.add_argument("--max-chars", type=int, default=env_int("VOICE_MAX_CHARS", 300), help="split text into chunks this long")
+    p.add_argument("--gap", type=float, default=env_float("VOICE_GAP", 0.15), help="seconds of silence between chunks")
+    p.add_argument("--seed", type=int, default=env_int("VOICE_SEED", None), help="set for reproducible output")
     args = p.parse_args(argv)
 
     if args.text and args.text_file:
@@ -300,7 +392,8 @@ def parse_args(argv=None):
             p.error(f"--text-file not found: {f}")
         args.text = f.read_text(encoding="utf-8")
     if args.text is None:
-        args.text = TEXT_TO_SPEAK
+        args.text = env_str("VOICE_TEXT",
+                            "Hello! This is my cloned voice, generated on my own machine.")
     if not args.text.strip():
         p.error("no text to speak")
 
@@ -315,6 +408,7 @@ def main(argv=None) -> int:
     print("Chatterbox voice cloning (local)")
     device = pick_device(args.device)
     print(f"  device    : {describe_device(device)}")
+    args.ref = resolve_reference(args.ref, args.voices_dir)
     check_reference(args.ref)
 
     if args.seed is not None:
