@@ -28,16 +28,22 @@ if [[ -e "$WORKDIR" ]]; then
   exit 1
 fi
 
+# The split must land on a real branch, otherwise the commit is unreachable
+# and a clone of this repo cannot see it.
+SPLIT_BRANCH="__vc_export_$$"
 echo "Splitting '$PREFIX/' into its own history..."
-SPLIT_SHA="$(git subtree split --prefix="$PREFIX" HEAD)"
-echo "  split commit: $SPLIT_SHA"
+git subtree split --prefix="$PREFIX" -b "$SPLIT_BRANCH" >/dev/null
+echo "  split branch: $SPLIT_BRANCH ($(git rev-parse --short "$SPLIT_BRANCH"))"
 
 echo "Creating standalone checkout at $WORKDIR"
-git clone --quiet --no-local --branch "$BRANCH" --single-branch \
-    "$(pwd)" "$WORKDIR" 2>/dev/null || git clone --quiet --no-local "$(pwd)" "$WORKDIR"
+git clone --quiet --no-local --branch "$SPLIT_BRANCH" --single-branch "$(pwd)" "$WORKDIR"
+
+# The temporary branch has served its purpose in the source repo.
+git branch -D "$SPLIT_BRANCH" >/dev/null
 
 cd "$WORKDIR"
-git checkout --quiet -B "$BRANCH" "$SPLIT_SHA"
+git checkout --quiet -B "$BRANCH"
+git branch --quiet -D "$SPLIT_BRANCH" 2>/dev/null || true
 git remote remove origin
 git remote add origin "$REMOTE"
 
